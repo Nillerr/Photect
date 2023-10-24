@@ -146,6 +146,15 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
         }
         
         do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            
+            try device.setTorchModeOn(level: AVCaptureDevice.maxAvailableTorchLevel)
+        } catch {
+            print("Failed to change configuration")
+        }
+        
+        do {
             let deviceInput = try AVCaptureDeviceInput(device: device)
             self.deviceInput = deviceInput
             
