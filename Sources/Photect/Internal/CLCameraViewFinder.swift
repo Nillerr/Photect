@@ -160,7 +160,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     private func showCameraFeed() {
-        self.previewLayer.videoGravity = .resizeAspect
+        self.previewLayer.videoGravity = .resizeAspectFill
         self.layer.addSublayer(self.previewLayer)
         self.previewLayer.frame = self.layer.frame
     }
