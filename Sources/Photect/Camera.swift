@@ -8,6 +8,10 @@ public class Camera: ObservableObject, CLCameraViewFinderDelegate {
     
     internal weak var view: CLCameraView?
     
+    public init() {
+        // Nothing
+    }
+    
     public func capture() {
         self.isCapturing = true
         self.view?.capture()
