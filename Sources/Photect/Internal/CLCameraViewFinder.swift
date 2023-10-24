@@ -20,6 +20,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     
     private let detectionLayer = CAShapeLayer()
     
+    private var device: AVCaptureDevice?
     private var deviceInput: AVCaptureDeviceInput?
     
     private let videoDataOutput = AVCaptureVideoDataOutput()
@@ -113,6 +114,17 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
             
             self.videoDataOutput.setSampleBufferDelegate(self, queue: self.queue)
             self.captureSession.startRunning()
+            
+            if let device = self.device {
+                do {
+                    try device.lockForConfiguration()
+                    defer { device.unlockForConfiguration() }
+                    
+                    try device.setTorchModeOn(level: AVCaptureDevice.maxAvailableTorchLevel)
+                } catch {
+                    print("Failed to change configuration")
+                }
+            }
         }
     }
     
@@ -143,15 +155,6 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
         
         guard let device = discoverySession.devices.first else {
             return print("Failed to find camera input device")
-        }
-        
-        do {
-            try device.lockForConfiguration()
-            defer { device.unlockForConfiguration() }
-            
-            try device.setTorchModeOn(level: AVCaptureDevice.maxAvailableTorchLevel)
-        } catch {
-            print("Failed to change configuration")
         }
         
         do {
