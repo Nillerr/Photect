@@ -157,6 +157,8 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
             return print("Failed to find camera input device")
         }
         
+        self.device = device
+        
         do {
             let deviceInput = try AVCaptureDeviceInput(device: device)
             self.deviceInput = deviceInput
