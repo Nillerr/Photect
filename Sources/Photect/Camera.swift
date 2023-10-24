@@ -6,7 +6,7 @@ public class Camera: ObservableObject, CLCameraViewFinderDelegate {
     @Published public private(set) var isCapturing: Bool = false
     @Published public private(set) var isInitializing: Bool = true
     
-    @Published var isTorchOn: Bool = false {
+    @Published public var isTorchOn: Bool = false {
         didSet { updateViewTorch() }
     }
     
