@@ -4,6 +4,8 @@ import AVFoundation
 import Vision
 
 internal protocol CLCameraView: AnyObject {
+    var isTorchOn: Bool { get set }
+    
     func capture()
 }
 
@@ -40,6 +42,10 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     
     private let ciContext = CIContext()
     
+    var isTorchOn: Bool = false {
+        didSet { updateTorchLevel() }
+    }
+    
     init() {
         super.init(frame: .zero)
         construct()
@@ -53,6 +59,36 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         construct()
+    }
+    
+    private func construct() {
+        setCameraInput()
+        showCameraFeed()
+        setCameraOutput()
+        setPhotoOutput()
+        
+        self.previewLayer.insertSublayer(self.detectionLayer, at: 1)
+    }
+    
+    private func updateTorchLevel() {
+        self.queue.async {
+            guard self.captureSession.isRunning else { return }
+            
+            if let device = self.device {
+                do {
+                    try device.lockForConfiguration()
+                    defer { device.unlockForConfiguration() }
+                    
+                    if self.isTorchOn {
+                        try device.setTorchModeOn(level: AVCaptureDevice.maxAvailableTorchLevel)
+                    } else {
+                        device.torchMode = .off
+                    }
+                } catch {
+                    print("Failed to change configuration")
+                }
+            }
+        }
     }
     
     func capture() {
@@ -115,16 +151,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
             self.videoDataOutput.setSampleBufferDelegate(self, queue: self.queue)
             self.captureSession.startRunning()
             
-            if let device = self.device {
-                do {
-                    try device.lockForConfiguration()
-                    defer { device.unlockForConfiguration() }
-                    
-                    try device.setTorchModeOn(level: AVCaptureDevice.maxAvailableTorchLevel)
-                } catch {
-                    print("Failed to change configuration")
-                }
-            }
+            self.updateTorchLevel()
         }
     }
     
@@ -135,15 +162,6 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
             self.videoDataOutput.setSampleBufferDelegate(nil, queue: self.queue)
             self.captureSession.stopRunning()
         }
-    }
-    
-    private func construct() {
-        setCameraInput()
-        showCameraFeed()
-        setCameraOutput()
-        setPhotoOutput()
-        
-        self.previewLayer.insertSublayer(self.detectionLayer, at: 1)
     }
     
     private func setCameraInput() {

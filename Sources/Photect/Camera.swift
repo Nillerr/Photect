@@ -6,10 +6,20 @@ public class Camera: ObservableObject, CLCameraViewFinderDelegate {
     @Published public private(set) var isCapturing: Bool = false
     @Published public private(set) var isInitializing: Bool = true
     
-    internal weak var view: CLCameraView?
+    @Published var isTorchOn: Bool = false {
+        didSet { updateViewTorch() }
+    }
+    
+    internal weak var view: CLCameraView? {
+        didSet { updateViewTorch() }
+    }
     
     public init() {
         // Nothing
+    }
+    
+    private func updateViewTorch() {
+        view?.isTorchOn = isTorchOn
     }
     
     public func capture() {
