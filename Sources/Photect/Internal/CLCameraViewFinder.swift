@@ -80,11 +80,12 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     
     private func simulate() {
         let simulation = UIImageView()
-        simulation.image = delegate?.imageForSimulatorInCameraViewFinder(self)
-        
         self.simulation = simulation
         
+        simulation.image = delegate?.imageForSimulatorInCameraViewFinder(self)
         addSubview(simulation)
+        
+        self.delegate?.cameraViewFinderDidInitialize()
     }
     
     private func updateTorchLevel() {
