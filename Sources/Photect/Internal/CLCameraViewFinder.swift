@@ -18,7 +18,7 @@ internal protocol CLCameraViewFinderDelegate: AnyObject {
 }
 
 internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferDelegate, AVCapturePhotoCaptureDelegate, CLCameraView {
-    private let captureSession = AVCaptureSession()
+    private lazy var captureSession = AVCaptureSession()
     
     private weak var simulation: UIImageView?
     
@@ -179,6 +179,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     func start() {
+#if !targetEnvironment(simulator)
         self.queue.async {
             guard !self.captureSession.isRunning else { return }
             
@@ -187,15 +188,18 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
             
             self.updateTorchLevel()
         }
+#endif
     }
     
     func stop() {
+#if !targetEnvironment(simulator)
         self.queue.async {
             guard self.captureSession.isRunning else { return }
             
             self.videoDataOutput.setSampleBufferDelegate(nil, queue: self.queue)
             self.captureSession.stopRunning()
         }
+#endif
     }
     
     private func setCameraInput() {
@@ -262,8 +266,11 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     override func layoutSubviews() {
         super.layoutSubviews()
         
-        self.previewLayer.frame = self.layer.bounds
+#if targetEnvironment(simulator)
         self.simulation?.frame = self.bounds
+#else
+        self.previewLayer.frame = self.layer.bounds
+#endif
     }
     
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
