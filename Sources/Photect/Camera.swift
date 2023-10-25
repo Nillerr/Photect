@@ -14,6 +14,8 @@ public class Camera: ObservableObject, CLCameraViewFinderDelegate {
         didSet { updateViewTorch() }
     }
     
+    public var simulatorImage: UIImage?
+    
     public init() {
         // Nothing
     }
@@ -29,6 +31,10 @@ public class Camera: ObservableObject, CLCameraViewFinderDelegate {
     
     public func reset() {
         self.photo = nil
+    }
+    
+    func imageForSimulatorInCameraViewFinder(_ camera: CLCameraViewFinder) -> UIImage? {
+        return self.simulatorImage
     }
     
     internal func cameraViewFinder(_ camera: CLCameraViewFinder, didCapturePhoto photo: UIImage) {

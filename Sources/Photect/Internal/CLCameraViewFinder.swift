@@ -10,6 +10,8 @@ internal protocol CLCameraView: AnyObject {
 }
 
 internal protocol CLCameraViewFinderDelegate: AnyObject {
+    func imageForSimulatorInCameraViewFinder(_ camera: CLCameraViewFinder) -> UIImage?
+    
     func cameraViewFinder(_ camera: CLCameraViewFinder, didCapturePhoto photo: UIImage)
     
     func cameraViewFinderDidInitialize()
@@ -17,6 +19,8 @@ internal protocol CLCameraViewFinderDelegate: AnyObject {
 
 internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferDelegate, AVCapturePhotoCaptureDelegate, CLCameraView {
     private let captureSession = AVCaptureSession()
+    
+    private weak var simulation: UIImageView?
     
     private lazy var previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
     
@@ -62,15 +66,31 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     private func construct() {
+#if targetEnvironment(simulator)
+        simulate()
+#else
         setCameraInput()
         showCameraFeed()
         setCameraOutput()
         setPhotoOutput()
-        
+    
         self.previewLayer.insertSublayer(self.detectionLayer, at: 1)
+#endif
+    }
+    
+    private func simulate() {
+        let simulation = UIImageView()
+        simulation.image = delegate?.imageForSimulatorInCameraViewFinder(self)
+        
+        self.simulation = simulation
+        
+        addSubview(simulation)
     }
     
     private func updateTorchLevel() {
+#if targetEnvironment(simulator)
+        // Nothing
+#else
         self.queue.async {
             guard self.captureSession.isRunning else { return }
             
@@ -89,11 +109,18 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
                 }
             }
         }
+#endif
     }
     
     func capture() {
+#if targetEnvironment(simulator)
+        if let image = self.simulation?.image {
+            self.delegate?.cameraViewFinder(self, didCapturePhoto: image)
+        }
+#else
         let settings = AVCapturePhotoSettings()
         self.photoOutput.capturePhoto(with: settings, delegate: self)
+#endif
     }
     
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
@@ -227,7 +254,9 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     
     override func layoutSubviews() {
         super.layoutSubviews()
+        
         self.previewLayer.frame = self.layer.bounds
+        self.simulation?.frame = self.bounds
     }
     
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
