@@ -2,7 +2,7 @@ import Combine
 import UIKit
 
 public class Camera: ObservableObject, CLCameraViewFinderDelegate {
-    @Published public private(set) var photo: UIImage?
+    @Published public var photo: UIImage?
     @Published public private(set) var isCapturing: Bool = false
     @Published public private(set) var isInitializing: Bool = true
     
