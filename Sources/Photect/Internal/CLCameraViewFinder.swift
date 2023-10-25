@@ -42,7 +42,13 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     private var isFirstDetection: Bool = true
     private var isDetecting: Bool = false
     
-    weak var delegate: CLCameraViewFinderDelegate?
+    weak var delegate: CLCameraViewFinderDelegate? {
+        didSet {
+#if targetEnvironment(simulator)
+            simulate()
+#endif
+        }
+    }
     
     private let ciContext = CIContext()
     
@@ -66,9 +72,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     private func construct() {
-#if targetEnvironment(simulator)
-        simulate()
-#else
+#if !targetEnvironment(simulator)
         setCameraInput()
         showCameraFeed()
         setCameraOutput()
@@ -89,9 +93,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     private func updateTorchLevel() {
-#if targetEnvironment(simulator)
-        // Nothing
-#else
+#if !targetEnvironment(simulator)
         self.queue.async {
             guard self.captureSession.isRunning else { return }
             
