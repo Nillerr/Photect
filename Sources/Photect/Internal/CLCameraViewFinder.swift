@@ -83,6 +83,8 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     private func simulate() {
+        self.simulation?.removeFromSuperview()
+        
         let simulation = UIImageView()
         self.simulation = simulation
         
