@@ -45,7 +45,9 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     weak var delegate: CLCameraViewFinderDelegate? {
         didSet {
 #if targetEnvironment(simulator)
-            simulate()
+            DispatchQueue.main.async { [weak self] in
+                self?.simulate()
+            }
 #endif
         }
     }
