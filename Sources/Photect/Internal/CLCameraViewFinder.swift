@@ -314,11 +314,11 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
             return
         }
         
-        guard let cgImage = image.cgImage else {
+        guard let data = image.pngData() else {
             return
         }
         
-        let handler = VNImageRequestHandler(cgImage: cgImage)
+        let handler = VNImageRequestHandler(data: data)
         detectDocument(using: handler)
     }
     
