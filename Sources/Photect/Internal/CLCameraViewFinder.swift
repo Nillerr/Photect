@@ -12,6 +12,8 @@ internal protocol CLCameraView: AnyObject {
 internal protocol CLCameraViewFinderDelegate: AnyObject {
     func imageForSimulatorInCameraViewFinder(_ camera: CLCameraViewFinder) -> UIImage?
     
+    func boundingBoxForSimulatorInCameraViewFinder(_ camera: CLCameraViewFinder) -> CGRect?
+    
     func cameraViewFinder(_ camera: CLCameraViewFinder, didCapturePhoto photo: UIImage)
     
     func cameraViewFinderDidInitialize()
@@ -91,13 +93,12 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
         
         let simulation = UIImageView()
         self.simulation = simulation
+        self.simulationBoundingBox = self.delegate?.boundingBoxForSimulatorInCameraViewFinder(self)
         
         simulation.image = self.delegate?.imageForSimulatorInCameraViewFinder(self)
         self.addSubview(simulation)
         
         self.startSimulationDetection()
-        
-//        self.delegate?.cameraViewFinderDidInitialize()
     }
     
     private func startSimulationDetection() {
