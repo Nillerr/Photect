@@ -15,6 +15,7 @@ public class Camera: ObservableObject, CLCameraViewFinderDelegate {
     }
     
     public var simulatorImage: UIImage?
+    public var simulatorBoundingBox: CGRect?
     
     public init() {
         // Nothing
@@ -35,6 +36,10 @@ public class Camera: ObservableObject, CLCameraViewFinderDelegate {
     
     func imageForSimulatorInCameraViewFinder(_ camera: CLCameraViewFinder) -> UIImage? {
         return self.simulatorImage
+    }
+    
+    func boundingBoxForSimulatorInCameraViewFinder(_ camera: CLCameraViewFinder) -> CGRect? {
+        return self.simulatorBoundingBox
     }
     
     internal func cameraViewFinder(_ camera: CLCameraViewFinder, didCapturePhoto photo: UIImage) {
