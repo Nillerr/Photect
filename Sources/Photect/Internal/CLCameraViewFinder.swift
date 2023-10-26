@@ -78,7 +78,14 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     private func construct() {
-#if !targetEnvironment(simulator)
+#if targetEnvironment(simulator)
+        let simulation = UIImageView()
+        simulation.contentMode = .scaleAspectFill
+        simulation.layer.insertSublayer(self.detectionLayer, at: 1)
+        
+        self.simulation = simulation
+        self.addSubview(simulation)
+#else
         setCameraInput()
         showCameraFeed()
         setCameraOutput()
@@ -89,15 +96,8 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     private func simulate() {
-        self.simulation?.removeFromSuperview()
-        
-        let simulation = UIImageView()
-        self.simulation = simulation
+        self.simulation?.image = self.delegate?.imageForSimulatorInCameraViewFinder(self)
         self.simulationBoundingBox = self.delegate?.boundingBoxForSimulatorInCameraViewFinder(self)
-        
-        simulation.image = self.delegate?.imageForSimulatorInCameraViewFinder(self)
-        simulation.contentMode = .scaleAspectFill
-        self.addSubview(simulation)
         
         self.startSimulationDetection()
     }
