@@ -22,6 +22,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     
     private weak var simulation: UIImageView?
     private var simulationDetectionTimer: Timer?
+    private var simulationBoundingBox: CGRect?
     
     private lazy var previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
     
@@ -310,16 +311,25 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
             return
         }
         
-        guard let image = simulation?.image else {
+        guard let boundingBox = self.simulationBoundingBox else {
             return
         }
         
-        guard let data = image.pngData() else {
-            return
+        DispatchQueue.main.async {
+            self.isDetecting = false
+            
+            if self.isFirstDetection {
+                self.delegate?.cameraViewFinderDidInitialize()
+                self.isFirstDetection = false
+            }
+            
+            if Int.random(in: 0...5) == 0 {
+                self.hideBoundingBox()
+            } else {
+                let observation = VNRectangleObservation(boundingBox: boundingBox)
+                self.drawBoundingBox(for: observation)
+            }
         }
-        
-        let handler = VNImageRequestHandler(data: data)
-        detectDocument(using: handler)
     }
     
     private func checkDetection() -> Bool {
