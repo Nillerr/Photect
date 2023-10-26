@@ -21,6 +21,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     private lazy var captureSession = AVCaptureSession()
     
     private weak var simulation: UIImageView?
+    private var simulationDetectionTimer: Timer?
     
     private lazy var previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
     
@@ -90,10 +91,24 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
         let simulation = UIImageView()
         self.simulation = simulation
         
-        simulation.image = delegate?.imageForSimulatorInCameraViewFinder(self)
-        addSubview(simulation)
+        simulation.image = self.delegate?.imageForSimulatorInCameraViewFinder(self)
+        self.addSubview(simulation)
         
-        self.delegate?.cameraViewFinderDidInitialize()
+        self.startSimulationDetection()
+        
+//        self.delegate?.cameraViewFinderDidInitialize()
+    }
+    
+    private func startSimulationDetection() {
+        self.simulationDetectionTimer?.invalidate()
+        self.simulationDetectionTimer = Timer.scheduledTimer(withTimeInterval: detectionRate + 0.05, repeats: true) { [weak self] timer in
+            self?.simulateDetection()
+        }
+    }
+    
+    private func stopSimulationDetection() {
+        self.simulationDetectionTimer?.invalidate()
+        self.simulationDetectionTimer = nil
     }
     
     private func updateTorchLevel() {
@@ -179,7 +194,9 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     func start() {
-#if !targetEnvironment(simulator)
+#if targetEnvironment(simulator)
+        self.startSimulationDetection()
+#else
         self.queue.async {
             guard !self.captureSession.isRunning else { return }
             
@@ -192,7 +209,9 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     func stop() {
-#if !targetEnvironment(simulator)
+#if targetEnvironment(simulator)
+        self.stopSimulationDetection()
+#else
         self.queue.async {
             guard self.captureSession.isRunning else { return }
             
@@ -274,19 +293,49 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        let now = Date.timeIntervalSinceReferenceDate
-        let nextDetectionAt = self.lastDetectionAt + self.detectionRate
-        guard nextDetectionAt < now, !isDetecting else {
+        guard checkDetection() else {
             return
         }
-        
-        self.isDetecting = true
-        self.lastDetectionAt = now
         
         guard let frame = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return print("Failed to decode frame from buffer")
         }
         
+        let handler = VNImageRequestHandler(cvPixelBuffer: frame, options: [:])
+        detectDocument(using: handler)
+    }
+    
+    private func simulateDetection() {
+        guard checkDetection() else {
+            return
+        }
+        
+        guard let image = simulation?.image else {
+            return
+        }
+        
+        guard let cgImage = image.cgImage else {
+            return
+        }
+        
+        let handler = VNImageRequestHandler(cgImage: cgImage)
+        detectDocument(using: handler)
+    }
+    
+    private func checkDetection() -> Bool {
+        let now = Date.timeIntervalSinceReferenceDate
+        let nextDetectionAt = self.lastDetectionAt + self.detectionRate
+        guard nextDetectionAt < now, !isDetecting else {
+            return false
+        }
+        
+        self.isDetecting = true
+        self.lastDetectionAt = now
+        
+        return true
+    }
+    
+    private func detectDocument(using handler: VNImageRequestHandler) {
         let request = VNDetectDocumentSegmentationRequest { [weak self] request, error in
             self?.isDetecting = false
             
@@ -316,7 +365,6 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
             }
         }
         
-        let handler = VNImageRequestHandler(cvPixelBuffer: frame, options: [:])
         try? handler.perform([request])
     }
     
