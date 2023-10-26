@@ -96,6 +96,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
         self.simulationBoundingBox = self.delegate?.boundingBoxForSimulatorInCameraViewFinder(self)
         
         simulation.image = self.delegate?.imageForSimulatorInCameraViewFinder(self)
+        simulation.contentMode = .scaleAspectFill
         self.addSubview(simulation)
         
         self.startSimulationDetection()
