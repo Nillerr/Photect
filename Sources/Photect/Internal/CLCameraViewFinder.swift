@@ -17,6 +17,7 @@ internal protocol CLCameraViewFinderDelegate: AnyObject {
     func cameraViewFinder(_ camera: CLCameraViewFinder, didCapturePhoto photo: UIImage)
     
     func cameraViewFinderDidInitialize()
+    func cameraViewFinderDidFail(with error: CameraError)
 }
 
 internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferDelegate, AVCapturePhotoCaptureDelegate, CLCameraView {
@@ -119,7 +120,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
         self.queue.async {
             guard self.captureSession.isRunning else { return }
             
-            if let device = self.device {
+            if let device = self.device, device.hasTorch, device.isTorchAvailable {
                 do {
                     try device.lockForConfiguration()
                     defer { device.unlockForConfiguration() }
@@ -232,6 +233,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
         )
         
         guard let device = discoverySession.devices.first else {
+            self.delegate?.cameraViewFinderDidFail(with: .noVideoCaptureDevices)
             return print("Failed to find camera input device")
         }
         
@@ -245,9 +247,11 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
                 self.captureSession.addInput(deviceInput)
             } else {
                 print("Failed to add device input to session: \(deviceInput)")
+                self.delegate?.cameraViewFinderDidFail(with: .sessionInputAdditionFailed)
             }
         } catch {
             print("Failed to create device input for device: \(device)")
+            self.delegate?.cameraViewFinderDidFail(with: .captureDeviceInitializationFailed(error))
         }
     }
     

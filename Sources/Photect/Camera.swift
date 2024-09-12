@@ -3,8 +3,11 @@ import UIKit
 
 public class Camera: ObservableObject, CLCameraViewFinderDelegate {
     @Published public var photo: UIImage?
+    
     @Published public private(set) var isCapturing: Bool = false
     @Published public private(set) var isInitializing: Bool = true
+    
+    @Published public private(set) var error: CameraError? = nil
     
     @Published public var isTorchOn: Bool = false {
         didSet { updateViewTorch() }
@@ -49,5 +52,11 @@ public class Camera: ObservableObject, CLCameraViewFinderDelegate {
     
     internal func cameraViewFinderDidInitialize() {
         self.isInitializing = false
+        self.error = nil
+    }
+    
+    internal func cameraViewFinderDidFail(with error: CameraError) {
+        self.isInitializing = false
+        self.error = error
     }
 }
