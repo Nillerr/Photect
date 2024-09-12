@@ -5,10 +5,10 @@ internal struct CameraViewFinderRepresentable: UIViewRepresentable {
     
     func makeUIView(context: Context) -> CLCameraViewFinder {
         let view = CLCameraViewFinder()
-        camera.view = view
-        
         view.delegate = camera
         view.start()
+        
+        camera.view = view
         
         return view
     }

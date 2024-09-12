@@ -65,20 +65,17 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     
     init() {
         super.init(frame: .zero)
-        construct()
     }
     
     override init(frame: CGRect) {
         super.init(frame: frame)
-        construct()
     }
     
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        construct()
     }
     
-    private func construct() {
+    func construct() {
 #if targetEnvironment(simulator)
         let simulation = UIImageView()
         simulation.contentMode = .scaleAspectFill
@@ -201,13 +198,17 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
 #if targetEnvironment(simulator)
         self.startSimulationDetection()
 #else
-        self.queue.async {
-            guard !self.captureSession.isRunning else { return }
+        DispatchQueue.main.async {
+            self.construct()
             
-            self.videoDataOutput.setSampleBufferDelegate(self, queue: self.queue)
-            self.captureSession.startRunning()
-            
-            self.updateTorchLevel()
+            self.queue.async {
+                guard !self.captureSession.isRunning else { return }
+                
+                self.videoDataOutput.setSampleBufferDelegate(self, queue: self.queue)
+                self.captureSession.startRunning()
+                
+                self.updateTorchLevel()
+            }
         }
 #endif
     }

@@ -56,6 +56,7 @@ public class Camera: ObservableObject, CLCameraViewFinderDelegate {
     }
     
     internal func cameraViewFinderDidFail(with error: CameraError) {
+        print("cameraViewFinderDidFail", error)
         self.isInitializing = false
         self.error = error
     }
