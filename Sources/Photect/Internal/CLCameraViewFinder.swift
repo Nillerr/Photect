@@ -330,7 +330,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
                 self.isFirstDetection = false
             }
             
-            if Int.random(in: 0...5) == 0 {
+            if Int.random(in: 0...5) == 3 {
                 self.hideBoundingBox()
             } else {
                 let observation = VNRectangleObservation(boundingBox: boundingBox)
