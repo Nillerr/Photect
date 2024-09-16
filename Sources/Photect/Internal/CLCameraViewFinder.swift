@@ -195,12 +195,12 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     func start() {
-#if targetEnvironment(simulator)
-        self.startSimulationDetection()
-#else
         DispatchQueue.main.async {
             self.construct()
-            
+
+#if targetEnvironment(simulator)
+            self.startSimulationDetection()
+#else
             self.queue.async {
                 guard !self.captureSession.isRunning else { return }
                 
@@ -209,8 +209,8 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
                 
                 self.updateTorchLevel()
             }
-        }
 #endif
+        }
     }
     
     func stop() {
