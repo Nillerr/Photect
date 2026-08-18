@@ -45,7 +45,18 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     private var detectionRate: Double = 0.5
     
     private var isFirstDetection: Bool = true
-    private var isDetecting: Bool = false
+    internal var isDetecting: Bool = false
+
+    /// Number of consecutive failed detections. Reset by any successful detection.
+    internal var consecutiveDetectionFailures: Int = 0
+
+    /// Number of consecutive failed detections tolerated before the delegate is told the camera
+    /// has failed. At the current detection rate of one attempt every 0.5s this is about 10s of
+    /// uninterrupted failure. Reporting the failure is terminal for the presentation — a consumer
+    /// that removes the view finder on error stops the capture session and no later frame can
+    /// recover it — so the bound is deliberately past the point where a consumer's own timeout
+    /// would have acted.
+    internal static let maximumConsecutiveDetectionFailures = 20
     
     weak var delegate: CLCameraViewFinderDelegate? {
         didSet {
@@ -339,7 +350,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
         }
     }
     
-    private func checkDetection() -> Bool {
+    internal func checkDetection() -> Bool {
         let now = Date.timeIntervalSinceReferenceDate
         let nextDetectionAt = self.lastDetectionAt + self.detectionRate
         guard nextDetectionAt < now, !isDetecting else {
@@ -352,17 +363,24 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
         return true
     }
     
-    private func detectDocument(using handler: VNImageRequestHandler) {
+    internal func detectDocument(using handler: VNImageRequestHandler) {
+        var didInvokeCompletion = false
+
         let request = VNDetectDocumentSegmentationRequest { [weak self] request, error in
+            didInvokeCompletion = true
+
             self?.isDetecting = false
-            
+
             if let error {
-                return print("An error occured while detecting", error)
+                self?.detectionDidFail(with: error)
+                return
             }
-            
+
+            self?.detectionDidSucceed()
+
             DispatchQueue.main.async {
                 guard let self else { return }
-                
+
                 if self.isFirstDetection {
                     self.delegate?.cameraViewFinderDidInitialize()
                     self.isFirstDetection = false
@@ -382,9 +400,43 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
             }
         }
         
-        try? handler.perform([request])
+        do {
+            try handler.perform([request])
+        } catch {
+            // Vision does not document whether a failing `perform` runs the request's completion
+            // handler before it throws, so compensate only if nothing else did. Left uncompensated
+            // the latch would stay set for the lifetime of the view and every later frame would
+            // return early at the !isDetecting guard, permanently disabling detection.
+            if !didInvokeCompletion {
+                self.isDetecting = false
+                self.detectionDidFail(with: error)
+            }
+        }
     }
-    
+
+    /// Clears the consecutive failure count. Called on the Vision completion thread.
+    internal func detectionDidSucceed() {
+        self.consecutiveDetectionFailures = 0
+    }
+
+    /// Records a failed detection attempt. A single failure is transient and recovers on the next
+    /// frame, so it is only logged; an uninterrupted run of them is reported to the delegate once,
+    /// which clears the initializing state on the consumer side instead of leaving it pending
+    /// forever. Called on the Vision completion thread.
+    private func detectionDidFail(with error: Error) {
+        print("An error occured while detecting", error)
+
+        self.consecutiveDetectionFailures += 1
+
+        guard self.consecutiveDetectionFailures == Self.maximumConsecutiveDetectionFailures else {
+            return
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.delegate?.cameraViewFinderDidFail(with: .detectionFailed(error))
+        }
+    }
+
     private func drawBoundingBox(for observation: VNRectangleObservation) {
         self.lastDetection = observation
         
