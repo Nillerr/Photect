@@ -25,7 +25,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     
     private weak var simulation: UIImageView?
     private var simulationDetectionTimer: Timer?
-    private var simulationBoundingBox: CGRect?
+    internal var simulationBoundingBox: CGRect?
     
     private lazy var previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
     
@@ -312,27 +312,36 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
     
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard checkDetection() else {
-            return
-        }
-        
-        guard let frame = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            return print("Failed to decode frame from buffer")
-        }
-        
-        let handler = VNImageRequestHandler(cvPixelBuffer: frame, options: [:])
-        detectDocument(using: handler)
+        detectDocument(in: sampleBuffer)
     }
     
-    private func simulateDetection() {
-        guard checkDetection() else {
-            return
+    internal func detectDocument(in sampleBuffer: CMSampleBuffer) {
+        withDetectionClaim {
+            guard let frame = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                print("Failed to decode frame from buffer")
+                return .finished
+            }
+            
+            let handler = VNImageRequestHandler(cvPixelBuffer: frame, options: [:])
+            self.detectDocument(using: handler)
+            
+            return .handedOff
         }
-        
-        guard let boundingBox = self.simulationBoundingBox else {
-            return
+    }
+    
+    internal func simulateDetection() {
+        withDetectionClaim {
+            guard let boundingBox = self.simulationBoundingBox else {
+                return .finished
+            }
+            
+            self.simulateDetection(of: boundingBox)
+            
+            return .handedOff
         }
-        
+    }
+    
+    private func simulateDetection(of boundingBox: CGRect) {
         DispatchQueue.main.async {
             self.isDetecting = false
             
@@ -347,6 +356,39 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
                 let observation = VNRectangleObservation(boundingBox: boundingBox)
                 self.drawBoundingBox(for: observation)
             }
+        }
+    }
+    
+    /// Which side of a claim is responsible for clearing `isDetecting`.
+    internal enum DetectionClaimOutcome {
+        /// The work started a detection that owns the claim and clears it when it completes,
+        /// possibly on another thread. `withDetectionClaim` must not clear it.
+        case handedOff
+        
+        /// The work is over and started nothing, so `withDetectionClaim` clears the claim before
+        /// it returns.
+        case finished
+    }
+    
+    /// Claims the detection latch, runs `work`, and clears the claim unless `work` handed it on.
+    ///
+    /// The invariant is that `isDetecting` is set by exactly one `checkDetection()` and cleared
+    /// exactly once afterwards. Leaving it set permanently disables detection: every later frame
+    /// returns early at the `!isDetecting` guard, the delegate is never initialized, and nothing
+    /// reports an error. Clearing it too early permits overlapping detections, which is what the
+    /// latch exists to prevent.
+    ///
+    /// The choice cannot be skipped, because `work` has to return a `DetectionClaimOutcome` on
+    /// every path out of it — a new early return is a compile error until it says which side
+    /// clears the claim. A plain `defer` would not do: on the `handedOff` paths the claim outlives
+    /// this scope, and clearing it here would release a detection that is still in flight.
+    private func withDetectionClaim(_ work: () -> DetectionClaimOutcome) {
+        guard checkDetection() else {
+            return
+        }
+        
+        if work() == .finished {
+            self.isDetecting = false
         }
     }
     

@@ -1,3 +1,5 @@
+import AVFoundation
+import CoreMedia
 import Vision
 import UIKit
 import XCTest
@@ -62,6 +64,82 @@ final class CLCameraViewFinderDetectionTests: XCTestCase {
 
         XCTAssertFalse(finder.isDetecting, "A throw from perform must not leave the latch set")
         XCTAssertEqual(finder.consecutiveDetectionFailures, 1)
+    }
+
+    /// Waits out the detection rate, so that a following `checkDetection()` is gated only by the
+    /// latch and not by how recently the previous attempt ran.
+    private func waitForTheDetectionRate() {
+        Thread.sleep(forTimeInterval: 0.6)
+    }
+
+    /// A sample buffer that carries no image data, which is what a frame the video output could
+    /// not decode looks like: `CMSampleBufferGetImageBuffer` returns nil for it.
+    private func sampleBufferWithoutImageBuffer() throws -> CMSampleBuffer {
+        var sampleBuffer: CMSampleBuffer?
+
+        let status = CMSampleBufferCreate(
+            allocator: kCFAllocatorDefault,
+            dataBuffer: nil,
+            dataReady: true,
+            makeDataReadyCallback: nil,
+            refcon: nil,
+            formatDescription: nil,
+            sampleCount: 0,
+            sampleTimingEntryCount: 0,
+            sampleTimingArray: nil,
+            sampleSizeEntryCount: 0,
+            sampleSizeArray: nil,
+            sampleBufferOut: &sampleBuffer
+        )
+
+        XCTAssertEqual(status, noErr)
+
+        return try XCTUnwrap(sampleBuffer)
+    }
+
+    func testSampleBufferWithoutAnImageBufferReleasesTheDetectionLatch() throws {
+        let sampleBuffer = try sampleBufferWithoutImageBuffer()
+        XCTAssertNil(CMSampleBufferGetImageBuffer(sampleBuffer), "The fixture must not decode to an image")
+
+        let finder = CLCameraViewFinder()
+
+        finder.detectDocument(in: sampleBuffer)
+
+        XCTAssertFalse(finder.isDetecting, "An undecodable frame must not leave the latch set")
+
+        waitForTheDetectionRate()
+        XCTAssertTrue(finder.checkDetection(), "The next frame must be able to claim the latch")
+    }
+
+    func testMissingSimulationBoundingBoxReleasesTheDetectionLatch() {
+        let finder = CLCameraViewFinder()
+        finder.simulationBoundingBox = nil
+
+        finder.simulateDetection()
+
+        XCTAssertFalse(finder.isDetecting, "A missing bounding box must not leave the latch set")
+
+        waitForTheDetectionRate()
+        XCTAssertTrue(finder.checkDetection(), "The next tick must be able to claim the latch")
+    }
+
+    func testSimulatedDetectionHoldsTheLatchUntilItCompletes() {
+        let delegate = CameraViewFinderDelegateSpy()
+
+        let finder = CLCameraViewFinder()
+        finder.delegate = delegate
+        finder.simulationBoundingBox = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+
+        finder.simulateDetection()
+
+        XCTAssertTrue(finder.isDetecting, "The detection is still in flight, so the latch stays claimed")
+
+        let expectation = expectation(description: "main queue drained")
+        DispatchQueue.main.async { expectation.fulfill() }
+        wait(for: [expectation], timeout: 1)
+
+        XCTAssertFalse(finder.isDetecting, "The completed detection releases the latch")
+        XCTAssertEqual(delegate.initializeCount, 1, "The first detection initializes exactly once")
     }
 
     func testSingleFailureDoesNotReachTheDelegate() {
