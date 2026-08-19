@@ -59,6 +59,10 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     private var isFirstDetection: Bool = true
     internal var isDetecting: Bool = false
 
+    /// The `uniqueID` of the capture handed to `AVFoundation` and not yet reported to the
+    /// delegate, or nil when no capture is outstanding. Read and written on the main queue only.
+    private var inFlightCaptureID: Int64?
+
     /// Number of consecutive failed detections. Reset by any successful detection.
     internal var consecutiveDetectionFailures: Int = 0
 
@@ -184,7 +188,15 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     /// out of it: a new early return is a compile error until it says what the delegate is told. A
     /// plain `defer` would not do, because on the `handedOff` path the capture outlives this scope
     /// and reporting here would resolve a capture that is still in flight.
-    internal func withCaptureOutcome(_ work: () -> CaptureOutcome) {
+    ///
+    /// `id` identifies the capture `AVFoundation` is reporting on, and is nil for a capture that
+    /// never reached it. Two callbacks can report the same capture — the photo and the backstop —
+    /// so the first one to claim the id wins and the other returns without running `work`.
+    internal func withCaptureOutcome(resolving id: Int64? = nil, _ work: () -> CaptureOutcome) {
+        if let id, !resolveCapture(id: id) {
+            return
+        }
+
         switch work() {
         case .captured(let photo):
             self.delegate?.cameraViewFinder(self, didCapturePhoto: photo)
@@ -193,6 +205,24 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
         case .handedOff:
             break
         }
+    }
+
+    /// Records a capture as outstanding, so that whichever callback reports it first can claim it.
+    internal func beginCapture(id: Int64) {
+        self.inFlightCaptureID = id
+    }
+
+    /// Claims the outstanding capture `id`, and reports whether this call is the one that resolved
+    /// it. A second call for the same id returns false: the capture has already been reported and
+    /// notifying again would break the one-notification-per-capture invariant.
+    internal func resolveCapture(id: Int64) -> Bool {
+        guard self.inFlightCaptureID == id else {
+            return false
+        }
+
+        self.inFlightCaptureID = nil
+
+        return true
     }
 
     /// Whether `capturePhoto` may be called over this connection.
@@ -226,6 +256,7 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
             }
 
             let settings = AVCapturePhotoSettings()
+            self.beginCapture(id: settings.uniqueID)
             self.photoOutput.capturePhoto(with: settings, delegate: self)
 
             return .handedOff
@@ -234,18 +265,47 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        withCaptureOutcome {
-            if let error {
-                print("Failed to capture photo", error)
+        let id = photo.resolvedSettings.uniqueID
+
+        // AVCapturePhotoOutput calls its delegate on a private queue, and the delegate publishes
+        // into SwiftUI state, so hop to the main queue first — the same hop detectionDidFail and
+        // the initialize notification make. It also serializes this callback against the backstop
+        // below, so exactly one of them resolves the capture.
+        DispatchQueue.main.async {
+            self.withCaptureOutcome(resolving: id) {
+                if let error {
+                    print("Failed to capture photo", error)
+                    return .failed(.captureFailed(error))
+                }
+
+                guard let data = photo.fileDataRepresentation() else {
+                    print("Could not represent photo as file")
+                    return .failed(.captureFailed(nil))
+                }
+
+                return self.captureOutcome(forPhotoData: data)
+            }
+        }
+    }
+
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
+        captureDidFinish(resolving: resolvedSettings.uniqueID, error: error)
+    }
+
+    /// The backstop for a capture that was accepted and then produced no photo, which is what an
+    /// interruption mid-capture looks like — an incoming call, another app taking the camera.
+    /// AVFoundation does not guarantee `didFinishProcessingPhoto` for an aborted capture, and
+    /// without this the capture would be handed off and never reported, leaving `isCapturing` set
+    /// for the life of the screen with no photo and no error.
+    ///
+    /// It reports only if nothing has resolved this capture already, so it cannot notify a second
+    /// time on the ordinary path where the photo arrived first.
+    internal func captureDidFinish(resolving id: Int64, error: Error?) {
+        DispatchQueue.main.async {
+            self.withCaptureOutcome(resolving: id) {
+                print("Capture finished without delivering a photo", error as Any)
                 return .failed(.captureFailed(error))
             }
-
-            guard let data = photo.fileDataRepresentation() else {
-                print("Could not represent photo as file")
-                return .failed(.captureFailed(nil))
-            }
-
-            return self.captureOutcome(forPhotoData: data)
         }
     }
 
