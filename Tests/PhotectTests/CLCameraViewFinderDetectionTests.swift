@@ -23,6 +23,10 @@ private final class CameraViewFinderDelegateSpy: CLCameraViewFinderDelegate {
         // Nothing
     }
 
+    func cameraViewFinder(_ camera: CLCameraViewFinder, didFailToCapturePhoto error: CameraError) {
+        // Nothing
+    }
+
     func cameraViewFinderDidInitialize() {
         initializeCount += 1
     }

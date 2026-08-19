@@ -15,10 +15,22 @@ internal protocol CLCameraViewFinderDelegate: AnyObject {
     func boundingBoxForSimulatorInCameraViewFinder(_ camera: CLCameraViewFinder) -> CGRect?
     
     func cameraViewFinder(_ camera: CLCameraViewFinder, didCapturePhoto photo: UIImage)
-    
+
+    func cameraViewFinder(_ camera: CLCameraViewFinder, didFailToCapturePhoto error: CameraError)
+
     func cameraViewFinderDidInitialize()
     func cameraViewFinderDidFail(with error: CameraError)
 }
+
+/// The state of a capture connection the capture guard depends on. `AVCaptureConnection` conforms
+/// to it, and it exists so the guard can be exercised without an `AVCaptureSession`, which the
+/// simulator the tests run on cannot provide.
+internal protocol CLCaptureConnection {
+    var isActive: Bool { get }
+    var isEnabled: Bool { get }
+}
+
+extension AVCaptureConnection: CLCaptureConnection {}
 
 internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferDelegate, AVCapturePhotoCaptureDelegate, CLCameraView {
     private lazy var captureSession = AVCaptureSession()
@@ -46,6 +58,10 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
     
     private var isFirstDetection: Bool = true
     internal var isDetecting: Bool = false
+
+    /// The `uniqueID` of the capture handed to `AVFoundation` and not yet reported to the
+    /// delegate, or nil when no capture is outstanding. Read and written on the main queue only.
+    private var inFlightCaptureID: Int64?
 
     /// Number of consecutive failed detections. Reset by any successful detection.
     internal var consecutiveDetectionFailures: Int = 0
@@ -146,42 +162,175 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
 #endif
     }
     
+    /// How a step of the capture ends, and which side tells the delegate about it.
+    internal enum CaptureOutcome {
+        /// The capture produced a photo. `withCaptureOutcome` delivers it.
+        case captured(UIImage)
+
+        /// The capture could not be started, or started and produced nothing.
+        /// `withCaptureOutcome` reports it.
+        case failed(CameraError)
+
+        /// The work started a capture that reports its own outcome later, on another thread.
+        /// `withCaptureOutcome` must say nothing.
+        case handedOff
+    }
+
+    /// Runs `work` and tells the delegate how the capture ended, unless `work` handed the capture
+    /// on to something that reports it later.
+    ///
+    /// The invariant is that one `Camera.capture()` produces exactly one delegate notification.
+    /// `Camera` sets `isCapturing` when the capture starts and only a notification clears it, so a
+    /// path that returns without one leaves the shutter disabled for the lifetime of the screen,
+    /// with no photo and no error — the same defect as the detection latch in CPD-33988.
+    ///
+    /// The choice cannot be skipped, because `work` has to return a `CaptureOutcome` on every path
+    /// out of it: a new early return is a compile error until it says what the delegate is told. A
+    /// plain `defer` would not do, because on the `handedOff` path the capture outlives this scope
+    /// and reporting here would resolve a capture that is still in flight.
+    ///
+    /// `id` identifies the capture `AVFoundation` is reporting on, and is nil for a capture that
+    /// never reached it. Two callbacks can report the same capture — the photo and the backstop —
+    /// so the first one to claim the id wins and the other returns without running `work`.
+    internal func withCaptureOutcome(resolving id: Int64? = nil, _ work: () -> CaptureOutcome) {
+        if let id, !resolveCapture(id: id) {
+            return
+        }
+
+        switch work() {
+        case .captured(let photo):
+            self.delegate?.cameraViewFinder(self, didCapturePhoto: photo)
+        case .failed(let error):
+            self.delegate?.cameraViewFinder(self, didFailToCapturePhoto: error)
+        case .handedOff:
+            break
+        }
+    }
+
+    /// Records a capture as outstanding, so that whichever callback reports it first can claim it.
+    internal func beginCapture(id: Int64) {
+        self.inFlightCaptureID = id
+    }
+
+    /// Claims the outstanding capture `id`, and reports whether this call is the one that resolved
+    /// it. A second call for the same id returns false: the capture has already been reported and
+    /// notifying again would break the one-notification-per-capture invariant.
+    internal func resolveCapture(id: Int64) -> Bool {
+        guard self.inFlightCaptureID == id else {
+            return false
+        }
+
+        self.inFlightCaptureID = nil
+
+        return true
+    }
+
+    /// Whether `capturePhoto` may be called over this connection.
+    ///
+    /// `AVCapturePhotoOutput.capturePhoto` raises an Objective-C `NSInvalidArgumentException` when
+    /// the output has no active and enabled video connection. Swift cannot catch it, so the
+    /// process dies — the connection has to be checked before the call, not defended around it.
+    /// The session can stop at any time after the view finder initialized, for reasons no consumer
+    /// can see coming: an incoming call, another app taking the camera, a backgrounding.
+    internal static func canCapture(over connection: CLCaptureConnection?) -> Bool {
+        guard let connection else {
+            return false
+        }
+
+        return connection.isActive && connection.isEnabled
+    }
+
     func capture() {
+        withCaptureOutcome {
 #if targetEnvironment(simulator)
-        if let image = self.simulation?.image {
-            self.delegate?.cameraViewFinder(self, didCapturePhoto: image)
-        }
+            guard let image = self.simulation?.image else {
+                print("No simulation image to capture")
+                return .failed(.captureFailed(nil))
+            }
+
+            return .captured(image)
 #else
-        let settings = AVCapturePhotoSettings()
-        self.photoOutput.capturePhoto(with: settings, delegate: self)
+            guard Self.canCapture(over: self.photoOutput.connection(with: .video)) else {
+                print("No active and enabled video connection to capture over")
+                return .failed(.captureFailed(nil))
+            }
+
+            let settings = AVCapturePhotoSettings()
+            self.beginCapture(id: settings.uniqueID)
+            self.photoOutput.capturePhoto(with: settings, delegate: self)
+
+            return .handedOff
 #endif
+        }
     }
-    
+
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        if let error {
-            return print("Failed to capture photo", error)
+        let id = photo.resolvedSettings.uniqueID
+
+        // AVCapturePhotoOutput calls its delegate on a private queue, and the delegate publishes
+        // into SwiftUI state, so hop to the main queue first — the same hop detectionDidFail and
+        // the initialize notification make. It also serializes this callback against the backstop
+        // below, so exactly one of them resolves the capture.
+        DispatchQueue.main.async {
+            self.withCaptureOutcome(resolving: id) {
+                if let error {
+                    print("Failed to capture photo", error)
+                    return .failed(.captureFailed(error))
+                }
+
+                guard let data = photo.fileDataRepresentation() else {
+                    print("Could not represent photo as file")
+                    return .failed(.captureFailed(nil))
+                }
+
+                return self.captureOutcome(forPhotoData: data)
+            }
         }
-        
-        guard let data = photo.fileDataRepresentation() else {
-            return print("Could not represent photo as file")
-        }
-        
-        guard let image = CIImage(data: data, options: [.applyOrientationProperty: true]) else {
-            return print("Failed to represent captured photo as CIImage")
-        }
-        
-        guard let cropped = ciImage(from: image) else {
-            return print("Could not crop image")
-        }
-        
-        guard let cgImage = ciContext.createCGImage(cropped, from: cropped.extent) else {
-            return print("Could not convert CIImage to CGImage")
-        }
-        
-        let uiImage = UIImage(cgImage: cgImage)
-        delegate?.cameraViewFinder(self, didCapturePhoto: uiImage)
     }
-    
+
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
+        captureDidFinish(resolving: resolvedSettings.uniqueID, error: error)
+    }
+
+    /// The backstop for a capture that was accepted and then produced no photo, which is what an
+    /// interruption mid-capture looks like — an incoming call, another app taking the camera.
+    /// AVFoundation does not guarantee `didFinishProcessingPhoto` for an aborted capture, and
+    /// without this the capture would be handed off and never reported, leaving `isCapturing` set
+    /// for the life of the screen with no photo and no error.
+    ///
+    /// It reports only if nothing has resolved this capture already, so it cannot notify a second
+    /// time on the ordinary path where the photo arrived first.
+    internal func captureDidFinish(resolving id: Int64, error: Error?) {
+        DispatchQueue.main.async {
+            self.withCaptureOutcome(resolving: id) {
+                print("Capture finished without delivering a photo", error as Any)
+                return .failed(.captureFailed(error))
+            }
+        }
+    }
+
+    /// The part of the capture pipeline that depends only on the photo's file representation.
+    /// Separated from `photoOutput(_:didFinishProcessingPhoto:error:)` so it can be exercised
+    /// directly: `AVCapturePhoto` has no initializer a test can call.
+    internal func captureOutcome(forPhotoData data: Data) -> CaptureOutcome {
+        guard let image = CIImage(data: data, options: [.applyOrientationProperty: true]) else {
+            print("Failed to represent captured photo as CIImage")
+            return .failed(.captureFailed(nil))
+        }
+
+        guard let cropped = ciImage(from: image) else {
+            print("Could not crop image")
+            return .failed(.captureFailed(nil))
+        }
+
+        guard let cgImage = ciContext.createCGImage(cropped, from: cropped.extent) else {
+            print("Could not convert CIImage to CGImage")
+            return .failed(.captureFailed(nil))
+        }
+
+        return .captured(UIImage(cgImage: cgImage))
+    }
+
     private func ciImage(from ciImage: CIImage) -> CIImage? {
         guard let observation = lastDetection else {
             return ciImage
