@@ -15,10 +15,22 @@ internal protocol CLCameraViewFinderDelegate: AnyObject {
     func boundingBoxForSimulatorInCameraViewFinder(_ camera: CLCameraViewFinder) -> CGRect?
     
     func cameraViewFinder(_ camera: CLCameraViewFinder, didCapturePhoto photo: UIImage)
-    
+
+    func cameraViewFinder(_ camera: CLCameraViewFinder, didFailToCapturePhoto error: CameraError)
+
     func cameraViewFinderDidInitialize()
     func cameraViewFinderDidFail(with error: CameraError)
 }
+
+/// The state of a capture connection the capture guard depends on. `AVCaptureConnection` conforms
+/// to it, and it exists so the guard can be exercised without an `AVCaptureSession`, which the
+/// simulator the tests run on cannot provide.
+internal protocol CLCaptureConnection {
+    var isActive: Bool { get }
+    var isEnabled: Bool { get }
+}
+
+extension AVCaptureConnection: CLCaptureConnection {}
 
 internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferDelegate, AVCapturePhotoCaptureDelegate, CLCameraView {
     private lazy var captureSession = AVCaptureSession()
@@ -146,42 +158,119 @@ internal class CLCameraViewFinder: UIView, AVCaptureVideoDataOutputSampleBufferD
 #endif
     }
     
+    /// How a step of the capture ends, and which side tells the delegate about it.
+    internal enum CaptureOutcome {
+        /// The capture produced a photo. `withCaptureOutcome` delivers it.
+        case captured(UIImage)
+
+        /// The capture could not be started, or started and produced nothing.
+        /// `withCaptureOutcome` reports it.
+        case failed(CameraError)
+
+        /// The work started a capture that reports its own outcome later, on another thread.
+        /// `withCaptureOutcome` must say nothing.
+        case handedOff
+    }
+
+    /// Runs `work` and tells the delegate how the capture ended, unless `work` handed the capture
+    /// on to something that reports it later.
+    ///
+    /// The invariant is that one `Camera.capture()` produces exactly one delegate notification.
+    /// `Camera` sets `isCapturing` when the capture starts and only a notification clears it, so a
+    /// path that returns without one leaves the shutter disabled for the lifetime of the screen,
+    /// with no photo and no error — the same defect as the detection latch in CPD-33988.
+    ///
+    /// The choice cannot be skipped, because `work` has to return a `CaptureOutcome` on every path
+    /// out of it: a new early return is a compile error until it says what the delegate is told. A
+    /// plain `defer` would not do, because on the `handedOff` path the capture outlives this scope
+    /// and reporting here would resolve a capture that is still in flight.
+    internal func withCaptureOutcome(_ work: () -> CaptureOutcome) {
+        switch work() {
+        case .captured(let photo):
+            self.delegate?.cameraViewFinder(self, didCapturePhoto: photo)
+        case .failed(let error):
+            self.delegate?.cameraViewFinder(self, didFailToCapturePhoto: error)
+        case .handedOff:
+            break
+        }
+    }
+
+    /// Whether `capturePhoto` may be called over this connection.
+    ///
+    /// `AVCapturePhotoOutput.capturePhoto` raises an Objective-C `NSInvalidArgumentException` when
+    /// the output has no active and enabled video connection. Swift cannot catch it, so the
+    /// process dies — the connection has to be checked before the call, not defended around it.
+    /// The session can stop at any time after the view finder initialized, for reasons no consumer
+    /// can see coming: an incoming call, another app taking the camera, a backgrounding.
+    internal static func canCapture(over connection: CLCaptureConnection?) -> Bool {
+        guard let connection else {
+            return false
+        }
+
+        return connection.isActive && connection.isEnabled
+    }
+
     func capture() {
+        withCaptureOutcome {
 #if targetEnvironment(simulator)
-        if let image = self.simulation?.image {
-            self.delegate?.cameraViewFinder(self, didCapturePhoto: image)
-        }
+            guard let image = self.simulation?.image else {
+                print("No simulation image to capture")
+                return .failed(.captureFailed(nil))
+            }
+
+            return .captured(image)
 #else
-        let settings = AVCapturePhotoSettings()
-        self.photoOutput.capturePhoto(with: settings, delegate: self)
+            guard Self.canCapture(over: self.photoOutput.connection(with: .video)) else {
+                print("No active and enabled video connection to capture over")
+                return .failed(.captureFailed(nil))
+            }
+
+            let settings = AVCapturePhotoSettings()
+            self.photoOutput.capturePhoto(with: settings, delegate: self)
+
+            return .handedOff
 #endif
+        }
     }
-    
+
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        if let error {
-            return print("Failed to capture photo", error)
+        withCaptureOutcome {
+            if let error {
+                print("Failed to capture photo", error)
+                return .failed(.captureFailed(error))
+            }
+
+            guard let data = photo.fileDataRepresentation() else {
+                print("Could not represent photo as file")
+                return .failed(.captureFailed(nil))
+            }
+
+            return self.captureOutcome(forPhotoData: data)
         }
-        
-        guard let data = photo.fileDataRepresentation() else {
-            return print("Could not represent photo as file")
-        }
-        
-        guard let image = CIImage(data: data, options: [.applyOrientationProperty: true]) else {
-            return print("Failed to represent captured photo as CIImage")
-        }
-        
-        guard let cropped = ciImage(from: image) else {
-            return print("Could not crop image")
-        }
-        
-        guard let cgImage = ciContext.createCGImage(cropped, from: cropped.extent) else {
-            return print("Could not convert CIImage to CGImage")
-        }
-        
-        let uiImage = UIImage(cgImage: cgImage)
-        delegate?.cameraViewFinder(self, didCapturePhoto: uiImage)
     }
-    
+
+    /// The part of the capture pipeline that depends only on the photo's file representation.
+    /// Separated from `photoOutput(_:didFinishProcessingPhoto:error:)` so it can be exercised
+    /// directly: `AVCapturePhoto` has no initializer a test can call.
+    internal func captureOutcome(forPhotoData data: Data) -> CaptureOutcome {
+        guard let image = CIImage(data: data, options: [.applyOrientationProperty: true]) else {
+            print("Failed to represent captured photo as CIImage")
+            return .failed(.captureFailed(nil))
+        }
+
+        guard let cropped = ciImage(from: image) else {
+            print("Could not crop image")
+            return .failed(.captureFailed(nil))
+        }
+
+        guard let cgImage = ciContext.createCGImage(cropped, from: cropped.extent) else {
+            print("Could not convert CIImage to CGImage")
+            return .failed(.captureFailed(nil))
+        }
+
+        return .captured(UIImage(cgImage: cgImage))
+    }
+
     private func ciImage(from ciImage: CIImage) -> CIImage? {
         guard let observation = lastDetection else {
             return ciImage
